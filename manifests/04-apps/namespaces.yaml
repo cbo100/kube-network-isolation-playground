@@ -1,0 +1,24 @@
+# Namespaces for the demo workloads, enrolled in Istio ambient mode.
+# bookinfo   — Istio's multi-service L7 sample (Kiali topology, waypoint demos)
+# clientspace — netshoot-based clients (test / attacker identities)
+# dataspace   — TCP services (redis, postgres) for L4 identity-isolation demos
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bookinfo
+  labels:
+    istio.io/dataplane-mode: ambient
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: clientspace
+  labels:
+    istio.io/dataplane-mode: ambient
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dataspace
+  labels:
+    istio.io/dataplane-mode: ambient

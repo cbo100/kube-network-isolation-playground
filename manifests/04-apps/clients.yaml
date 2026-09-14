@@ -1,0 +1,99 @@
+# Client identities in clientspace. Uses the baked non-root image
+# (localhost/kubesandboxing/client:1.0, built from manifests/04-apps/client-image/)
+# which ships redis-cli/psql/curl/dig/nc — so these pods double as test clients and
+# "attacker" pods and support the plan 09 redis-cli/psql verification directly, with
+# no boot-time package install and without running as root.
+#
+# Distinct ServiceAccounts give each pod a distinct SPIFFE identity under STRICT mTLS
+# (plan 05), which the L4 AuthorizationPolicies in plans 06–09 select on:
+#   - trusted   -> SA trusted-client (allowed to reach redis/postgres in plan 09)
+#   - untrusted -> SA untrusted-client (denied)
+#   - netshoot  -> SA default (generic client used by plans 04/05 verification)
+#
+# The three pods are spread across the two worker nodes (podAntiAffinity by hostname)
+# so that in-mesh requests originate from more than one node.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: trusted-client
+  namespace: clientspace
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: untrusted-client
+  namespace: clientspace
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: netshoot
+  namespace: clientspace
+  labels: { app: netshoot, role: client }
+spec:
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            topologyKey: kubernetes.io/hostname
+            labelSelector: { matchLabels: { role: client } }
+  containers:
+    - name: client
+      image: localhost/kubesandboxing/client:1.0
+      imagePullPolicy: IfNotPresent
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        allowPrivilegeEscalation: false
+        capabilities: { drop: ["ALL"] }
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: trusted
+  namespace: clientspace
+  labels: { app: trusted, role: client }
+spec:
+  serviceAccountName: trusted-client
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            topologyKey: kubernetes.io/hostname
+            labelSelector: { matchLabels: { role: client } }
+  containers:
+    - name: client
+      image: localhost/kubesandboxing/client:1.0
+      imagePullPolicy: IfNotPresent
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        allowPrivilegeEscalation: false
+        capabilities: { drop: ["ALL"] }
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: untrusted
+  namespace: clientspace
+  labels: { app: untrusted, role: client }
+spec:
+  serviceAccountName: untrusted-client
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            topologyKey: kubernetes.io/hostname
+            labelSelector: { matchLabels: { role: client } }
+  containers:
+    - name: client
+      image: localhost/kubesandboxing/client:1.0
+      imagePullPolicy: IfNotPresent
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        allowPrivilegeEscalation: false
+        capabilities: { drop: ["ALL"] }
