@@ -16,6 +16,8 @@ export K8S_NODE_IMAGE="${K8S_NODE_IMAGE:-kindest/node:v1.37.0@sha256:a1ed56cfb0e
 export GATEWAY_API_VERSION="v1.6.1"
 export KGATEWAY_VERSION="2.4.4"
 export ISTIO_VERSION="1.31.0"
+export KUBE_PROM_STACK_VERSION="91.2.3"
+export KIALI_VERSION="2.31.0"
 
 # ---- pretty logging ----------------------------------------------------------
 _c() { printf '\033[%sm' "$1"; }

@@ -1,0 +1,33 @@
+# Prometheus Operator monitors so kube-prometheus-stack scrapes Istio ambient metrics.
+# istiod exposes metrics on port 15014 (http-monitoring); ztunnel on 15020 (ztunnel-stats).
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: istiod
+  namespace: istio-system
+  labels:
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: istiod
+  podMetricsEndpoints:
+    - port: http-monitoring
+      path: /metrics
+      interval: 15s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: ztunnel
+  namespace: istio-system
+  labels:
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: ztunnel
+  podMetricsEndpoints:
+    - port: ztunnel-stats
+      path: /stats/prometheus
+      interval: 15s

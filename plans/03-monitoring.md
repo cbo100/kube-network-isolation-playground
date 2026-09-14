@@ -2,38 +2,53 @@
 
 ## Purpose
 Observe cluster + mesh: metrics/dashboards via `kube-prometheus-stack`, and mesh topology
-+ policy visualization via **Kiali**.
++ policy visualization via **Kiali**. Prometheus is wired to scrape Istio ambient metrics
+(istiod + ztunnel).
 
 ## Prerequisites
-- Plans 00–02 complete (Kiali wants Istio metrics).
+- Plans 00–02 complete (Kiali + the Istio scrape configs need the mesh installed).
 
-## Steps
-1. kube-prometheus-stack (idempotent):
-   ```sh
-   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-   helm repo update
-   helm upgrade -i monitoring prometheus-community/kube-prometheus-stack \
-     --create-namespace -n monitoring
-   ```
-2. Istio addons — Prometheus scrape config + Kiali:
-   ```sh
-   kubectl apply -f https://raw.githubusercontent.com/istio/istio/release-1.31/samples/addons/kiali.yaml
-   ```
-   (Point Kiali at the kube-prometheus-stack Prometheus service if not using the bundled one.)
+## Pinned versions
+- kube-prometheus-stack: `91.2.3`
+- kiali-server: `2.31.0`
+
+## Run
+```sh
+./scripts/03-monitoring.sh
+```
+Idempotent. Installs the stack + Kiali (values files), applies Istio PodMonitors, and
+verifies Prometheus is scraping istiod.
+
+## What it installs
+- **kube-prometheus-stack** in `monitoring` (Prometheus, Grafana, Alertmanager, operator,
+  kube-state-metrics, node-exporter). Values:
+  `manifests/03-monitoring/kube-prometheus-stack.values.yaml`
+  (cluster-wide monitor discovery, 6h retention, grafana admin/admin).
+- **Istio scrape config**: `manifests/03-monitoring/istio-podmonitors.yaml` — PodMonitors
+  for `istiod` (port 15014 `/metrics`) and `ztunnel` (port 15020 `/stats/prometheus`).
+- **Kiali** in `istio-system`, anonymous auth, pointed at the in-cluster Prometheus/Grafana.
+  Values: `manifests/03-monitoring/kiali.values.yaml`.
 
 ## Verify
 ```sh
 kubectl -n monitoring get pods
-kubectl -n istio-system get deploy kiali
-# port-forward to view:
-kubectl -n monitoring port-forward svc/monitoring-grafana 3000:80 &
+kubectl -n istio-system get pods -l app=kiali
+
+# Prometheus targets (istiod + ztunnels should be health=up):
+kubectl -n monitoring port-forward sts/prometheus-monitoring-kube-prometheus-prometheus 9099:9090 &
+curl -sS "http://localhost:9099/api/v1/targets?state=active" \
+  | jq -r '.data.activeTargets[] | select(.labels.namespace=="istio-system") | "\(.labels.pod)  \(.health)"'
+
+# UIs (port-forward):
+kubectl -n monitoring   port-forward svc/monitoring-grafana 3000:80 &     # admin/admin
 kubectl -n istio-system port-forward svc/kiali 20001:20001 &
 ```
 
 ## Notes
-- Optionally expose Grafana/Kiali through the kgateway ingress with `HTTPRoute` instead of
-  port-forward.
-- Loki/Tempo (logs/traces) are out of scope for now; can be layered later.
+- The Prometheus container image has no `wget`/`curl`; the script verifies targets via a
+  throwaway `curlimages/curl` pod hitting the Prometheus API.
+- Optionally expose Grafana/Kiali through the kgateway ingress with `HTTPRoute` later.
+- Loki/Tempo (logs/traces) are out of scope for now.
 
 ## Next
 `plans/04-example-apps.md`

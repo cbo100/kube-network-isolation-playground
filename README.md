@@ -44,7 +44,7 @@ versions and driven by idempotent scripts so it can be torn down and rebuilt at 
 | Gateway API CRDs     | v1.6.1 (standard) |
 | kgateway             | 2.4.4          |
 | Istio (ambient)      | v1.31          |
-| Monitoring           | kube-prometheus-stack + Kiali |
+| Monitoring           | kube-prometheus-stack 91.2.3 + Kiali 2.31.0 |
 | OIDC provider        | Keycloak (Dex noted as lighter alt) |
 
 ## Feature demonstrations

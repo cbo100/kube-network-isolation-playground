@@ -1,0 +1,29 @@
+# Helm values for kube-prometheus-stack (chart 91.2.3).
+# Applied by scripts/03-monitoring.sh. Tuned for a local kind cluster: modest retention,
+# and Prometheus set to discover ServiceMonitors/PodMonitors in ALL namespaces so the
+# Istio ambient scrape configs (istiod, ztunnel) and kgateway metrics are picked up.
+
+prometheus:
+  prometheusSpec:
+    retention: 6h
+    # Discover monitors cluster-wide, not only those with the release's helm labels.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    resources:
+      requests:
+        cpu: 100m
+        memory: 400Mi
+
+grafana:
+  # Local demo credentials (admin/admin). Not for anything real.
+  adminPassword: admin
+  defaultDashboardsTimezone: browser
+
+# Keep the local footprint small.
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
