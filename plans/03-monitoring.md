@@ -29,6 +29,22 @@ verifies Prometheus is scraping istiod.
 - **Kiali** in `istio-system`, anonymous auth, pointed at the in-cluster Prometheus/Grafana.
   Values: `manifests/03-monitoring/kiali.values.yaml`.
 
+## UIs (via the kgateway ingress)
+All four UIs are exposed through the ingress at `localhost:9090` using host-based
+`HTTPRoute`s (`manifests/03-monitoring/ui-routes.yaml`). On macOS, `*.localhost` resolves to
+`127.0.0.1` automatically — just open:
+
+| UI           | URL                                   | Notes            |
+|--------------|---------------------------------------|------------------|
+| Grafana      | http://grafana.localhost:9090         | login admin/admin |
+| Prometheus   | http://prometheus.localhost:9090      |                  |
+| Alertmanager | http://alertmanager.localhost:9090    |                  |
+| Kiali        | http://kiali.localhost:9090           | mesh topology    |
+
+Cross-namespace routing (Gateway in `kgateway-system` → Services in `monitoring` /
+`istio-system`) is permitted by `ReferenceGrant`s in each backend namespace.
+Grafana `root_url` and Kiali `web_root: /` are set so they serve correctly at the host root.
+
 ## Verify
 ```sh
 kubectl -n monitoring get pods
@@ -39,9 +55,9 @@ kubectl -n monitoring port-forward sts/prometheus-monitoring-kube-prometheus-pro
 curl -sS "http://localhost:9099/api/v1/targets?state=active" \
   | jq -r '.data.activeTargets[] | select(.labels.namespace=="istio-system") | "\(.labels.pod)  \(.health)"'
 
-# UIs (port-forward):
-kubectl -n monitoring   port-forward svc/monitoring-grafana 3000:80 &     # admin/admin
-kubectl -n istio-system port-forward svc/kiali 20001:20001 &
+# UIs through the ingress:
+curl -sSI http://grafana.localhost:9090/login
+open http://kiali.localhost:9090      # macOS
 ```
 
 ## Notes

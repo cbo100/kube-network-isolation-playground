@@ -41,7 +41,11 @@ helm upgrade -i kiali-server kiali/kiali-server \
   -f "${M}/kiali.values.yaml"
 retry 40 5 kubectl -n istio-system rollout status deploy/kiali --timeout=20s
 
-# --- 4. Report + verify -------------------------------------------------------
+# --- 4. Expose UIs through the kgateway ingress -------------------------------
+log "applying HTTPRoutes for UIs (grafana/prometheus/alertmanager/kiali .localhost)"
+kubectl apply -f "${M}/ui-routes.yaml"
+
+# --- 5. Report + verify -------------------------------------------------------
 log "monitoring namespace:"; kubectl -n monitoring get pods
 log "kiali:"; kubectl -n istio-system get pods -l app=kiali
 
@@ -54,8 +58,24 @@ check_targets() {
     | grep -q '"pod":"istiod'
 }
 if retry 20 6 check_targets; then
-  log "plan 03 complete: Prometheus/Grafana/Alertmanager + Kiali up; Istio targets scraped"
+  log "Istio targets scraped by Prometheus"
 else
   warn "Istio targets not yet visible in Prometheus; check PodMonitors and give it a minute"
   die "plan 03 verification incomplete"
 fi
+
+log "verifying UIs are reachable through the ingress (Host header -> :9090):"
+ui_check() { # <host> <expected-substring-in-any-response>
+  curl -sSf --max-time 5 -H "Host: $1" "http://localhost:9090/" -o /dev/null -w '%{http_code}'
+}
+for h in grafana.localhost prometheus.localhost alertmanager.localhost kiali.localhost; do
+  code="$(retry 15 4 bash -c "curl -sS -o /dev/null -w '%{http_code}' --max-time 5 -H 'Host: $h' -L http://localhost:9090/ | grep -qE '^(200|30.)$' && curl -sS -o /dev/null -w '%{http_code}' --max-time 5 -H 'Host: $h' http://localhost:9090/" 2>/dev/null || echo "ERR")"
+  log "  http://$h/ (via :9090) -> ${code}"
+done
+
+log "plan 03 complete: monitoring stack up, Istio scraped, UIs exposed via ingress"
+log "UIs (add to /etc/hosts or use curl -H Host:): "
+log "  Grafana:      http://grafana.localhost:9090        (admin/admin)"
+log "  Prometheus:   http://prometheus.localhost:9090"
+log "  Alertmanager: http://alertmanager.localhost:9090"
+log "  Kiali:        http://kiali.localhost:9090"

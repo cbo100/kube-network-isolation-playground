@@ -6,6 +6,10 @@ auth:
 deployment:
   namespace: istio-system
 
+server:
+  # Served at the root of kiali.localhost through the kgateway ingress.
+  web_root: /
+
 external_services:
   prometheus:
     # In-cluster Prometheus service created by kube-prometheus-stack in `monitoring`.

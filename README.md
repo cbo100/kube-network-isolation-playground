@@ -81,6 +81,16 @@ plans/                step-by-step plan files, one per milestone
 Each `plans/NN-*.md` is self-contained: purpose, prerequisites, exact commands, and how to
 **verify** the milestone.
 
+## Monitoring UIs
+
+After plan 03, these are reachable through the kgateway ingress (macOS resolves
+`*.localhost` automatically):
+
+- Grafana — http://grafana.localhost:9090 (admin/admin)
+- Prometheus — http://prometheus.localhost:9090
+- Alertmanager — http://alertmanager.localhost:9090
+- Kiali — http://kiali.localhost:9090
+
 ## Plan index
 
 - `plans/00-cluster.md` — multi-node kind cluster

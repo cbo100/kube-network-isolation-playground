@@ -19,6 +19,11 @@ grafana:
   # Local demo credentials (admin/admin). Not for anything real.
   adminPassword: admin
   defaultDashboardsTimezone: browser
+  # Served at the root of grafana.localhost through the kgateway ingress.
+  grafana.ini:
+    server:
+      root_url: "http://grafana.localhost/"
+      serve_from_sub_path: false
 
 # Keep the local footprint small.
 alertmanager:
