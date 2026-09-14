@@ -37,5 +37,19 @@ kubectl -n clientspace exec netshoot -- curl -sS --max-time 5 productpage.bookin
 - Default-deny is the foundation for plans 06–10; each feature plan adds the minimal ALLOW.
 - Manifests in `manifests/05-baseline/` when executed.
 
+## Optional: bring the monitoring tooling into the mesh
+Entirely optional, but a nice extension — govern the observability stack with the same
+mesh controls it observes:
+```sh
+kubectl label ns monitoring istio.io/dataplane-mode=ambient --overwrite
+```
+- Gives Grafana/Prometheus/Alertmanager SPIFFE identities + transparent mTLS (L4).
+- Then restrict the UIs with an `AuthorizationPolicy` (e.g. only the kgateway ingress
+  identity may reach them), demonstrating isolation applied to the tooling itself.
+- Verify Prometheus targets stay `health=up` after enrollment (plan 03's check covers this).
+- Do **not** enroll `istio-system` (istiod/ztunnel are the dataplane; leave them unlabeled).
+- L7 policy on the UI routes would additionally require a waypoint (same rule as the feature
+  plans).
+
 ## Next
 `plans/06-feature-ns-isolation.md`
