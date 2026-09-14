@@ -14,7 +14,7 @@ export KIND_CONTEXT="kind-${CLUSTER_NAME}"
 #   v1.34.11 @sha256:44e222ee2132dab25ff87301682f89eb82c7880ea3a1bf543bfe9708fd08d67d
 export K8S_NODE_IMAGE="${K8S_NODE_IMAGE:-kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5}"
 export GATEWAY_API_VERSION="v1.6.1"
-export KGATEWAY_VERSION="v2.4.3"
+export KGATEWAY_VERSION="2.4.4"
 export ISTIO_VERSION="1.31.0"
 
 # ---- pretty logging ----------------------------------------------------------

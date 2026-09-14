@@ -1,0 +1,54 @@
+# GatewayParameters: pin the generated kgateway proxy to the control-plane node (which
+# owns kind's host-port mappings 9090->80 and 9443->443) and bind the proxy's listener
+# ports as hostPorts on that node so the kind extraPortMappings resolve to the proxy.
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: GatewayParameters
+metadata:
+  name: pin-control-plane
+  namespace: kgateway-system
+spec:
+  kube:
+    podTemplate:
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+    # Strategic-merge overlay onto the generated Deployment to add a hostPort to the
+    # proxy's listener. Container is "kgateway-proxy"; the port named "listener-80" is
+    # generated from the Gateway listener (port 80). Adding hostPort binds node port 80,
+    # which kind maps to host :9090. Ports merge by name.
+    deploymentOverlay:
+      spec:
+        template:
+          spec:
+            containers:
+              - name: kgateway-proxy
+                ports:
+                  - name: listener-80
+                    containerPort: 80
+                    hostPort: 80
+                    protocol: TCP
+---
+# North-south ingress Gateway. Listener 80 is exposed on node port 80 via the overlay
+# above, which kind maps to host :9090.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: http
+  namespace: kgateway-system
+spec:
+  gatewayClassName: kgateway
+  infrastructure:
+    parametersRef:
+      group: gateway.kgateway.dev
+      kind: GatewayParameters
+      name: pin-control-plane
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: All

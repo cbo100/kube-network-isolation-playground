@@ -1,0 +1,11 @@
+# Helm values for the kgateway control-plane chart (chart: kgateway, v2.4.4).
+# Applied by scripts/01-kgateway.sh via: helm upgrade -i -f manifests/01-kgateway/values.yaml
+#
+# Note: this configures the CONTROL PLANE only. Data-plane proxy tuning (node pinning,
+# hostPort, listeners) lives in manifests/01-kgateway/gateway.yaml via GatewayParameters.
+
+controller:
+  # Enable the Istio ambient integration so kgateway honors Istio DestinationRules and
+  # participates with the ambient dataplane (ztunnel/waypoints) installed in plan 02.
+  extraEnv:
+    KGW_ENABLE_ISTIO_INTEGRATION: "true"

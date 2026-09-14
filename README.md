@@ -42,7 +42,7 @@ versions and driven by idempotent scripts so it can be torn down and rebuilt at 
 | kind                 | v0.33          |
 | Kubernetes (node)    | v1.37.0 (digest-pinned; highest for kind v0.33) |
 | Gateway API CRDs     | v1.6.1 (standard) |
-| kgateway             | v2.4.3         |
+| kgateway             | 2.4.4          |
 | Istio (ambient)      | v1.31          |
 | Monitoring           | kube-prometheus-stack + Kiali |
 | OIDC provider        | Keycloak (Dex noted as lighter alt) |
