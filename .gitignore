@@ -1,0 +1,27 @@
+# macOS
+.DS_Store
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# Kubernetes / local secrets & state
+kubeconfig
+*.kubeconfig
+kube-config*
+*.tmp
+
+# Downloaded tooling (e.g. istioctl bundle from plan 02)
+istio-*/
+
+# Helm
+charts/
+*.tgz
+
+# Generated / local overrides
+*.local.yaml
+secrets/
+.env
+.env.*
