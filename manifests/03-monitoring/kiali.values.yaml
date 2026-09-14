@@ -11,6 +11,19 @@ server:
   web_root: /
 
 external_services:
+  istio:
+    # Register the Gateway API classes present in this cluster so Kiali recognises
+    # them in validations/topology. Without kgateway here, Kiali raises KIA1504
+    # ("Gateway API Class not found in Kiali configuration") for the kgateway
+    # ingress Gateway. Names are Kiali display labels; class_name must match the
+    # GatewayClass metadata.name.
+    gateway_api_classes:
+      - name: Istio
+        class_name: istio
+      - name: Istio Waypoint
+        class_name: istio-waypoint
+      - name: K-Gateway
+        class_name: kgateway
   prometheus:
     # In-cluster Prometheus service created by kube-prometheus-stack in `monitoring`.
     url: "http://monitoring-kube-prometheus-prometheus.monitoring:9090"
