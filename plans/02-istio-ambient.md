@@ -6,19 +6,23 @@ mTLS and workload identity, and integrate it with the kgateway ingress from plan
 
 ## Prerequisites
 - Plans 00–01 complete.
-- `istioctl` (`v1.31.x`) installed. If missing:
-  ```sh
-  curl -L https://istio.io/downloadIstio | ISTIO_VERSION=1.31.0 sh -
-  export PATH="$PWD/istio-1.31.0/bin:$PATH"
-  ```
+- `mise` installed. `istioctl` (pinned to `1.31.0` in `mise.toml`) is provided by mise —
+  no manual download. The script runs `mise install` then `mise exec -- istioctl ...`.
 
-## Steps
-1. Install ambient profile (idempotent — converges):
+## Run
+```sh
+./scripts/02-istio-ambient.sh
+```
+Idempotent. Installs the ambient profile, waits for istiod/cni/ztunnel, enrolls
+`kgateway-system`, and re-checks that the ingress `/.gw/ping` still returns `200 PONG`.
+
+## Steps (performed by the script)
+1. Install ambient profile:
    ```sh
    istioctl install --set profile=ambient --skip-confirmation
    ```
    Installs `base`, `istiod`, `istio-cni` (node agent), and `ztunnel`.
-2. Add the ingress namespace to the mesh so **gateway → app** traffic is mTLS via ztunnel:
+2. Add the ingress namespace to the mesh so **gateway -> app** traffic is mTLS via ztunnel:
    ```sh
    kubectl label ns kgateway-system istio.io/dataplane-mode=ambient --overwrite
    ```
@@ -29,10 +33,11 @@ mTLS and workload identity, and integrate it with the kgateway ingress from plan
 
 ## Verify
 ```sh
-istioctl version
-kubectl -n istio-system get pods            # istiod Running
-kubectl get daemonset -n istio-system       # istio-cni-node + ztunnel on every node
-istioctl ztunnel-config workload            # workloads listed with identities
+mise exec -- istioctl version
+kubectl -n istio-system get pods                       # istiod Running
+kubectl -n istio-system get daemonset istio-cni-node ztunnel   # both on every node
+mise exec -- istioctl ztunnel-config workload          # workloads listed; enrolled ns show HBONE
+curl -sS http://localhost:9090/.gw/ping                # still 200 PONG (no ingress regression)
 ```
 
 ## Notes / gotchas

@@ -31,6 +31,15 @@ need() { command -v "$1" >/dev/null 2>&1 || die "required tool not found: $1"; }
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export REPO_ROOT
 
+# ---- local tooling via mise --------------------------------------------------
+# Tool versions are pinned in mise.toml at the repo root. `mise_ensure` installs
+# them; `istioctl` runs the pinned istioctl regardless of what's on PATH.
+mise_ensure() {
+  need mise
+  ( cd "$REPO_ROOT" && mise install )
+}
+istioctl() { ( cd "$REPO_ROOT" && mise exec -- istioctl "$@" ); }
+
 # ---- idempotent wait helpers -------------------------------------------------
 # retry <attempts> <sleep_seconds> <cmd...>
 retry() {
