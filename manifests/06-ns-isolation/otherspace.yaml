@@ -1,0 +1,50 @@
+# A second ambient-enrolled namespace used as the NEGATIVE control for the
+# namespace-isolation demo: it is identical in spirit to clientspace but is NOT granted
+# any allow to bookinfo. It must stay DENIED, proving the allow-clientspace rule is
+# scoped to one namespace rather than opening bookinfo to everyone.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: otherspace
+  labels:
+    # enrol in ambient so its traffic gets a SPIFFE identity + mTLS, exactly like
+    # clientspace — the ONLY difference between the two is the authorization allow.
+    istio.io/dataplane-mode: ambient
+---
+# netshoot client in otherspace (baked non-root image, same as clientspace clients).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: netshoot
+  namespace: otherspace
+  labels: { app: netshoot, role: client }
+spec:
+  containers:
+    - name: client
+      image: localhost/kubesandboxing/client:1.0
+      imagePullPolicy: IfNotPresent
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        allowPrivilegeEscalation: false
+        capabilities: { drop: ["ALL"] }
+---
+# Baseline NetworkPolicy for otherspace, mirroring plan 05's per-namespace baseline:
+# default-deny ingress (same-namespace only), egress open. This keeps otherspace's
+# posture identical to clientspace so the comparison is fair — the deny it experiences
+# toward bookinfo comes from bookinfo's OWN ingress policy not listing otherspace, not
+# from anything special here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: baseline
+  namespace: otherspace
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: otherspace }
+  egress:
+    - {}

@@ -1,0 +1,41 @@
+# =============================================================================
+# Namespace-to-namespace isolation (CNI layer, L3/L4) — allow clientspace -> bookinfo
+# =============================================================================
+# WHY THIS EXISTS (defense-in-depth, second layer)
+#   plan 05's bookinfo `baseline` NetworkPolicy denies inbound from every namespace
+#   except bookinfo itself and kgateway-system. So even though the mesh authz above now
+#   ALLOWS clientspace, Calico would still DROP the packets at L3/L4 — the request would
+#   time out instead of succeed. To actually open the clientspace->bookinfo path, BOTH
+#   layers must permit it. This policy is the CNI half.
+#
+# WHY A SEPARATE ADDITIVE POLICY (not editing plan 05's baseline)
+#   NetworkPolicies are additive: a connection is allowed if ANY policy selecting the
+#   target pod permits it. Keeping this as its own plan-06 manifest preserves the clean
+#   plan boundaries (plan 05 = baseline deny; plan 06 = the one allow it introduces) and
+#   makes the feature trivially reversible by deleting just this file's resource.
+#
+# WHY otherspace IS STILL DENIED
+#   otherspace is deliberately NOT listed as an allowed source here (nor in the mesh
+#   authz). Both layers therefore continue to deny it, which is exactly the negative
+#   control the demo relies on.
+#
+# NOTE ON THE TWO LAYERS GATING DIFFERENTLY
+#   - This NetworkPolicy matches on the source NAMESPACE LABEL (IP/label based).
+#   - The mesh AuthorizationPolicy matches on the source SPIFFE IDENTITY (crypto based).
+#   An attacker would have to defeat both a network-level and an identity-level control.
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-clientspace
+  namespace: bookinfo
+spec:
+  # apply to all bookinfo pods (same target set as the baseline deny)
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    # add clientspace as an allowed inbound source, on top of the baseline's
+    # same-namespace + kgateway-system allows.
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: clientspace }

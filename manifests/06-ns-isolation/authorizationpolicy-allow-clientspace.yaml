@@ -1,0 +1,46 @@
+# =============================================================================
+# Namespace-to-namespace isolation (mesh layer, L4) — allow ONLY clientspace
+# =============================================================================
+# WHY THIS EXISTS
+#   plan 05 put bookinfo into default-deny: NOTHING may reach its workloads. This is the
+#   first feature that pokes a single, identity-scoped hole in that deny: it permits the
+#   clientspace namespace (and only clientspace) to call bookinfo. otherspace, which is
+#   otherwise identical, stays denied — demonstrating that isolation is deny-by-default
+#   and allows are additive + tightly scoped.
+#
+# HOW IT COMBINES WITH default-deny (the key Istio semantic)
+#   AuthorizationPolicies are additive: a request is ALLOWED if ANY allow-policy matches.
+#   The empty-spec default-deny from plan 05 matches all workloads but permits nothing;
+#   this policy adds one ALLOW. Net effect for bookinfo workloads: permit iff the source
+#   is in clientspace, else deny. Removing this policy instantly restores full deny.
+#
+# WHY SOURCE NAMESPACE (not IP) IS TRUSTWORTHY
+#   `from.source.namespaces` is evaluated by ztunnel against the peer's authenticated
+#   SPIFFE identity (cluster.local/ns/<ns>/sa/<sa>), established by STRICT mTLS (plan 05).
+#   The namespace is derived from that cryptographic identity, so it cannot be spoofed by
+#   forging an IP or a header — unlike a NetworkPolicy match, which is IP/label based.
+#   That is the whole point of this demo vs. a plain NetworkPolicy.
+#
+# ENFORCED AT ztunnel (L4) — NO WAYPOINT
+#   Matching on source namespace is an L4 concern, so ztunnel handles it directly. No
+#   waypoint proxy is required (waypoints are only needed for L7 rules like JWT/path,
+#   which is plan 10). Denials manifest as connection resets, not HTTP 403.
+#
+# SCOPE NOTE
+#   This does NOT allow the kgateway ingress identity (kgateway-system), so the
+#   bookinfo.localhost ingress route stays denied (503). Restoring the ingress with
+#   end-user auth is plan 10. Here we only prove ns->ns isolation between app namespaces.
+# =============================================================================
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-clientspace
+  namespace: bookinfo
+spec:
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            # only workloads whose authenticated identity is in the clientspace
+            # namespace may reach bookinfo. otherspace (and everyone else) is denied.
+            namespaces: ["clientspace"]
