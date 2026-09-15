@@ -22,7 +22,7 @@
 #     trusted   -> tcpbin.com:4242 (TCP) + example.com:443 (HTTPS)  [allowed]
 #     untrusted -> en.wikipedia.org:443 (HTTPS)                     [allowed]
 #     cross/other combinations                                     [denied]
-#     UNDECLARED host (example.org) -> reachable by ALL             [plan 11/12 limitation]
+#     UNDECLARED host (example.org) -> reachable by ALL             [plan 11 limitation]
 #
 # Sources are distinct SPIFFE identities under STRICT mTLS (plan 05); matches are on the
 # authenticated source principal, un-spoofable by IP/namespace/header.
@@ -165,8 +165,8 @@ row "clientspace/netshoot  -> wikipedia"   "$(probe_https clientspace netshoot  
 # approved identity may reach it" — NOT "block the rest of the internet". Expect ALL
 # three identities to reach an undeclared host. If any of these ever flips to "no",
 # an effective egress default-deny landed (REGISTRY_ONLY equivalent) — update this
-# section and plan 11/12.
-log "egress example.org:443 (HTTPS, UNDECLARED) — uncontrolled: ALL identities reach it (plan 11/12 limitation):"
+# section and plan 11.
+log "egress example.org:443 (HTTPS, UNDECLARED) — uncontrolled: ALL identities reach it (plan 11 limitation):"
 row "clientspace/trusted   -> example.org (undeclared)" "$(probe_https clientspace trusted   https://example.org)" ok
 row "clientspace/untrusted -> example.org (undeclared)" "$(probe_https clientspace untrusted https://example.org)" ok
 row "clientspace/netshoot  -> example.org (undeclared)" "$(probe_https clientspace netshoot  https://example.org)" ok
