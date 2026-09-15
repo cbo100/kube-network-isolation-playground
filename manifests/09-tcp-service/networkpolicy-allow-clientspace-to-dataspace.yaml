@@ -1,0 +1,38 @@
+# =============================================================================
+# Pod-to-TCP-service isolation (CNI layer, L3/L4) — allow clientspace -> dataspace
+# =============================================================================
+# WHY THIS EXISTS (the second layer)
+#   plan 05's dataspace `baseline` NetworkPolicy denies inbound from every namespace except
+#   dataspace itself. So even though the mesh authz now ALLOWs trusted-client to redis/
+#   postgres, Calico would still DROP the packets at L3/L4 and the connection would time out.
+#   To actually open the path, BOTH layers must permit it; this is the CNI half.
+#
+# WHY NAMESPACE-SCOPED (not pod-scoped) IS FINE HERE
+#   NetworkPolicy can only gate by IP/namespace/label, NOT by cryptographic identity. So this
+#   policy opens the L3/L4 path for the whole clientspace namespace. That is deliberately
+#   COARSE — the fine-grained "only trusted-client, only these ports" decision is made by the
+#   mesh AuthorizationPolicy (authorizationpolicies.yaml). Result of the two layers together:
+#     - untrusted/netshoot: reach dataspace at L3/L4 (allowed here) but are RESET by ztunnel
+#       authz (wrong identity) -> effectively denied.
+#     - trusted-client: allowed by BOTH layers -> connection succeeds.
+#   This is the intended defense-in-depth split: CNI controls reachability by network, the
+#   mesh controls access by identity.
+#
+# WHY ADDITIVE (separate file, not editing plan 05's baseline)
+#   NetworkPolicies are additive: a connection is allowed if ANY policy permits it. Keeping
+#   this as its own plan-09 object preserves clean plan boundaries and makes the feature
+#   trivially reversible by deleting just this resource.
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-clientspace
+  namespace: dataspace
+spec:
+  # applies to all dataspace pods (same target set as the baseline deny)
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: clientspace }

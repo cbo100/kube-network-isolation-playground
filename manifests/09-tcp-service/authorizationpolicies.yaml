@@ -1,0 +1,75 @@
+# =============================================================================
+# Pod-to-TCP-service isolation (mesh layer, L4) — redis + postgres in dataspace
+# =============================================================================
+# WHAT THIS DEMONSTRATES
+#   Identity-based isolation for NON-HTTP, raw-TCP services (a cache and a database).
+#   Unlike ingress/egress (plans 08/10) this needs NO waypoint: ztunnel enforces L4 authz
+#   on the source SPIFFE principal + destination port directly. The exact same policy shape
+#   that governs HTTP also governs opaque TCP — mesh isolation is protocol-agnostic.
+#
+# THE MATRIX WE ENFORCE
+#   trusted-client   -> redis:6379  AND  postgres:5432    (the approved app identity)
+#   untrusted-client -> denied to both
+#   netshoot / anyone else -> denied to both
+#
+# HOW "everyone else is denied" ARISES
+#   plan 05 put dataspace into default-deny (empty-spec AuthorizationPolicy). These ALLOW
+#   policies are additive: a request is permitted iff an ALLOW matches it. Only requests
+#   from trusted-client to the named ports match, so all other identities stay denied and
+#   ztunnel RESETS their connections (no TCP handshake completes).
+#
+# WHY PORT-SCOPING MATTERS (to.operation.ports)
+#   The allow is pinned to the service's real port (6379 / 5432). This means the grant is
+#   "trusted-client may speak redis on 6379", not "trusted-client may reach any port on the
+#   redis pod". If the pod later exposed a second port (metrics, admin), it would NOT be
+#   covered by this allow — least privilege at the port level.
+#
+# WHY IDENTITY (source principal) BEATS NetworkPolicy HERE
+#   The match is the cryptographic SPIFFE identity from STRICT mTLS (plan 05):
+#   cluster.local/ns/clientspace/sa/trusted-client. It cannot be spoofed by IP or namespace
+#   label. A plain Kubernetes NetworkPolicy could only say "these pod IPs on port 6379",
+#   which an attacker who lands any pod in an allowed namespace could satisfy. Here they'd
+#   need trusted-client's mTLS certificate.
+#
+# NOTE: a matching NetworkPolicy (networkpolicy-allow-clientspace-to-dataspace.yaml) opens
+# the L3/L4 path too — plan 05's dataspace baseline otherwise drops clientspace at the CNI,
+# so BOTH layers must permit the path (defense-in-depth).
+# =============================================================================
+---
+# redis — allow ONLY trusted-client, ONLY on 6379
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-redis-trusted-client
+  namespace: dataspace
+spec:
+  action: ALLOW
+  selector:
+    matchLabels:
+      app: redis
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/clientspace/sa/trusted-client"]
+      to:
+        - operation:
+            ports: ["6379"]
+---
+# postgres — allow ONLY trusted-client, ONLY on 5432
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-postgres-trusted-client
+  namespace: dataspace
+spec:
+  action: ALLOW
+  selector:
+    matchLabels:
+      app: postgres
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/clientspace/sa/trusted-client"]
+      to:
+        - operation:
+            ports: ["5432"]
