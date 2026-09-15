@@ -2,9 +2,16 @@
 # 1 control-plane (ingress pinned here) + 2 workers.
 # Host ports 9090->80 and 9443->443 are mapped on the control-plane node so the
 # kgateway Gateway (pinned to the control-plane) is reachable at localhost:9090/9443.
+#
+# CNI: kind's default (kindnet) is DISABLED so we can install Calico, which enforces
+# Kubernetes NetworkPolicy (kindnet does not). Calico is configured for the pod CIDR
+# below in scripts/00-cluster.sh.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: cluster
+networking:
+  disableDefaultCNI: true          # replace kindnet with Calico (policy enforcement)
+  podSubnet: "10.244.0.0/16"       # Calico IPPool is configured to match this
 nodes:
   - role: control-plane
     labels:

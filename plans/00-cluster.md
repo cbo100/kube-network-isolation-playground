@@ -11,8 +11,9 @@ mappings always resolve.
 - No conflicting process bound to host ports **9090** / **9443**.
 
 ## Files
-- `kind/cluster.yaml` — cluster topology + control-plane `extraPortMappings`.
-- `scripts/00-cluster.sh` — idempotent create/recreate + readiness wait.
+- `kind/cluster.yaml` — cluster topology + control-plane `extraPortMappings`; the default
+  CNI is disabled here (`disableDefaultCNI: true`) so Calico can be installed instead.
+- `scripts/00-cluster.sh` — idempotent create/recreate, Calico CNI install, readiness wait.
 - `scripts/lib.sh` — shared helpers and pinned versions.
 
 ## Run
@@ -35,6 +36,10 @@ docker ps --filter name=cluster-control-plane --format '{{.Ports}}'  # 9090->80,
   `K8S_NODE_IMAGE=kindest/node:vX.Y.Z@sha256:...` before running.
 - Only the control-plane node carries the host-port mappings; ingress workloads must be
   scheduled there (handled in plan 01 via `nodeSelector`/pinning).
+- **CNI = Calico** (pinned `CALICO_VERSION` in `lib.sh`): kind's default kindnet does **not**
+  enforce Kubernetes NetworkPolicy, so it is disabled and Calico is installed via the tigera
+  operator. This makes plan 05's baseline NetworkPolicies actually enforced. Nodes remain
+  `NotReady` until Calico programs the dataplane — expected during bootstrap.
 
 ## Next
 `plans/01-kgateway.md`

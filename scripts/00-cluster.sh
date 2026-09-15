@@ -21,15 +21,52 @@ if kind get clusters 2>/dev/null | grep -qx "$CLUSTER_NAME"; then
 fi
 
 log "creating multi-node cluster '${CLUSTER_NAME}' (1 control-plane + 2 workers)"
+# NOTE: no --wait here. The default CNI is disabled (see kind/cluster.yaml), so nodes
+# stay NotReady until Calico is installed below; waiting for Ready now would time out.
 if [ -n "${K8S_NODE_IMAGE}" ]; then
-  kind create cluster --name "$CLUSTER_NAME" --config "$CONFIG" --image "$K8S_NODE_IMAGE" --wait 120s
+  kind create cluster --name "$CLUSTER_NAME" --config "$CONFIG" --image "$K8S_NODE_IMAGE"
 else
-  kind create cluster --name "$CLUSTER_NAME" --config "$CONFIG" --wait 120s
+  kind create cluster --name "$CLUSTER_NAME" --config "$CONFIG"
 fi
 
 # --- context ------------------------------------------------------------------
 kubectl config use-context "$KIND_CONTEXT" >/dev/null
 log "using context: $KIND_CONTEXT"
+
+# --- CNI: Calico --------------------------------------------------------------
+# kind's default CNI (kindnet) is disabled in kind/cluster.yaml because it does not
+# enforce NetworkPolicy. Install Calico so plan 05's baseline NetworkPolicies are
+# actually enforced. Nodes stay NotReady until the CNI is up.
+log "installing Calico ${CALICO_VERSION} (operator + custom resources)"
+kubectl apply --server-side -f "https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/tigera-operator.yaml"
+
+log "waiting for tigera-operator to be ready"
+retry 30 5 kubectl -n tigera-operator rollout status deploy/tigera-operator --timeout=20s
+
+log "configuring Calico Installation (pod CIDR ${POD_SUBNET})"
+kubectl apply -f - <<EOF
+apiVersion: operator.tigera.io/v1
+kind: Installation
+metadata:
+  name: default
+spec:
+  calicoNetwork:
+    ipPools:
+      - name: default-ipv4-ippool
+        cidr: ${POD_SUBNET}
+        encapsulation: VXLANCrossSubnet
+        natOutgoing: Enabled
+        nodeSelector: all()
+---
+apiVersion: operator.tigera.io/v1
+kind: APIServer
+metadata:
+  name: default
+spec: {}
+EOF
+
+log "waiting for Calico to program the dataplane (calico-node DaemonSet)"
+retry 60 5 kubectl -n calico-system rollout status ds/calico-node --timeout=20s
 
 # --- wait for all nodes Ready -------------------------------------------------
 log "waiting for all nodes to become Ready"
