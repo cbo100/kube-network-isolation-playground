@@ -153,3 +153,58 @@ CNI/host controls are excluded by our constraints, the recommended posture is:
 identities. If a future Istio/ztunnel version starts blocking them (an effective
 registry-only landed), those rows will flip to `no` and the script will fail — that's the
 signal to revisit this plan.
+
+---
+
+## Side question: is ambient worth the hassle, vs. plain sidecar Istio?
+
+This came up naturally from the egress work: **the one control we couldn't build in ambient
+(a REGISTRY_ONLY egress default-deny) is exactly the thing sidecar Istio gives you for
+free.** So it's fair to ask whether ambient earned its keep across plans 05–10. Honest,
+grounded-in-what-we-saw take:
+
+### Where sidecar would have been equal or better
+- **Egress default-deny (this plan).** `outboundTrafficPolicy: REGISTRY_ONLY` is a one-line
+  MeshConfig change in sidecar mode and it *works* — undeclared hosts are blocked. In
+  ambient it is unenforceable in-mesh (the whole reason plan 11 exists). Straight loss for
+  ambient.
+- **L7 egress from the source proxy.** In sidecar, the workload's own Envoy applies egress
+  policy inline; no separate egress waypoint hop/pod to run. Fewer moving parts for that
+  specific feature.
+- **Maturity of niche knobs.** `exportTo` scoping, per-sidecar egress — all long-settled in
+  sidecar, partially different/ignored in ambient (documented in the Solo migration guide).
+
+### Where ambient clearly paid off in *this* repo
+- **L4 identity authz with ZERO proxies in the path (plans 06/07/09).** ns-isolation,
+  pod-to-pod isolation, and the raw-TCP redis/postgres isolation are all enforced by
+  **ztunnel at L4 — no waypoint, no sidecar injection**. Same SPIFFE-identity guarantees,
+  but nothing was injected into the app pods. In sidecar mode every one of those pods
+  (bookinfo ×6, redis, postgres, the clients) would carry an Envoy sidecar just to get mTLS
+  identity + L4 authz.
+- **Raw TCP services for free (plan 09).** redis/postgres got identity-based authz with no
+  per-pod proxy and no protocol fuss. The isolation is protocol-agnostic at ztunnel.
+- **Pay for L7 only where you use it (plans 08/10).** We ran a waypoint *only* for egress
+  (plan 08) and would have for JWT (parked plan 10) — i.e. an L7 proxy exists exactly at the
+  two places that need L7, instead of one Envoy per pod everywhere.
+- **Operational blast radius / upgrades.** No sidecar injection means no pod restarts to
+  adopt or upgrade the data plane, no init-container ordering issues, no sidecar-vs-app
+  lifecycle races. We swapped ztunnel/waypoint versions without touching app pods.
+- **Resource cost.** One ztunnel per node + a couple of waypoints, vs. ~10 sidecars here.
+  At small scale it's a wash; the gap widens with pod count.
+
+### Bottom line (for this workload)
+For a repo whose center of gravity is **identity-based L4 isolation** (namespaces, pods,
+raw-TCP services), **ambient is the better fit**: we got the core guarantees with far fewer
+proxies and no injection, and only stood up an L7 proxy where L7 was actually required. The
+**single** feature where sidecar wins outright is the **egress default-deny** — and that is
+better solved *below* the mesh anyway (firewall/CNI), regardless of sidecar vs. ambient, so
+it's a weak reason to adopt sidecars everywhere.
+
+Rule of thumb this exercise supports:
+- Mostly-L4 identity/segmentation, many pods, want cheap mTLS everywhere → **ambient**.
+- Heavy per-request L7 policy on *most* services, or a hard in-mesh egress allow-list is a
+  non-negotiable requirement and you can't add a network-layer firewall → **sidecar** is
+  still the pragmatic choice.
+
+(Not investigated here, so flagged rather than claimed: sidecar's richer per-workload L7
+story — e.g. EnvoyFilter, fine-grained per-route policy — may matter for other workloads.)
