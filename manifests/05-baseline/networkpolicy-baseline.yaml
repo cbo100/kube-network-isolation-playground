@@ -1,0 +1,110 @@
+# =============================================================================
+# Baseline Kubernetes NetworkPolicy (L3/L4 defense-in-depth) for the app namespaces
+# =============================================================================
+# WHY THIS EXISTS (and why it's SEPARATE from the mesh authz)
+#   The default-deny AuthorizationPolicy (authorizationpolicy-default-deny.yaml) already
+#   denies traffic at the mesh layer (ztunnel, identity-based). This NetworkPolicy adds
+#   a SECOND, independent layer at L3/L4 (IP/port), enforced by the CNI. Defense-in-depth:
+#   if a mesh rule is ever misconfigured, bypassed, or a pod is somehow not captured by
+#   ztunnel, the CNI still blocks unauthorized cross-namespace reachability. The two
+#   layers gate on different things (crypto identity vs. IP/namespace), so an attacker
+#   must defeat BOTH.
+#
+# WHY CALICO (critical prerequisite)
+#   NetworkPolicy is only meaningful if the CNI ENFORCES it. kind's default kindnet does
+#   NOT — policies would be silently accepted but never applied, giving a false sense of
+#   security. plan 00 therefore installs Calico so these rules are actually enforced.
+#
+# DESIGN: default-deny INGRESS, open EGRESS (deliberate, explained)
+#   - policyTypes: [Ingress, Egress] with an empty-ish ingress list makes the namespace
+#     DENY all inbound by default; we then add back only the sources that must reach in.
+#   - We intentionally leave EGRESS open (`egress: [{}]`). Reasoning:
+#       * The isolation the demos prove is about who can REACH a service (ingress); the
+#         mesh authz already governs egress by identity where it matters.
+#       * A restrictive egress-deny is the #1 way to silently break an ambient dataplane:
+#         it can sever DNS (kube-dns) and the ztunnel/istio-cni HBONE path, producing
+#         confusing "connection reset" failures unrelated to the demo. Keeping egress
+#         open avoids that footgun while the ingress-deny still provides real L3/L4
+#         isolation. (Verified: DNS + HBONE + health all keep working with this config.)
+#   Net effect verified: same-namespace traffic works; cross-namespace inbound is blocked
+#   at the CNI (on top of the mesh reset); DNS resolves; ingress/health/UIs unaffected.
+# =============================================================================
+---
+# ----- bookinfo ---------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: baseline
+  namespace: bookinfo
+spec:
+  # podSelector: {} => this policy applies to EVERY pod in the namespace.
+  podSelector: {}
+  # Declaring both types flips the namespace to deny-by-default for inbound; egress is
+  # listed too but left permissive below (see rationale in the header).
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # RULE 1 — allow same-namespace traffic.
+    # WHY: bookinfo is multi-service (productpage -> details/reviews/ratings, reviews ->
+    # ratings). Those internal calls must keep working, so we permit pods within the
+    # bookinfo namespace to talk to each other. Without this, the app would break itself.
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: bookinfo }
+    # RULE 2 — allow the ingress gateway namespace to reach app pods.
+    # WHY: bookinfo is fronted by the kgateway 'http' gateway (in kgateway-system). The
+    # edge->productpage hop must be permitted at L3/L4 or the ingress route can never
+    # work. NOTE: this only opens the CNI layer; the MESH still enforces default-deny by
+    # identity, so bookinfo stays denied until plan 06 adds the AuthorizationPolicy allow.
+    # This is the belt-and-braces split: CNI allows the path, mesh authz still gates it.
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kgateway-system }
+  egress:
+    # Egress left open on purpose (see header). Cross-namespace *ingress* deny + mesh
+    # authz provide the isolation; this avoids breaking DNS and the ztunnel HBONE path.
+    - {}
+---
+# ----- clientspace ------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: baseline
+  namespace: clientspace
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # RULE — same-namespace only.
+    # WHY: clientspace holds the test/"attacker" client pods (netshoot/trusted/untrusted).
+    # Nothing outside should need to initiate connections INTO these clients; they are
+    # traffic SOURCES, not services. Denying inbound from other namespaces shrinks their
+    # attack surface while still letting them reach out (egress open) to run the demos.
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: clientspace }
+  egress:
+    - {}   # open: clients must be able to *attempt* reaching bookinfo/dataspace so the
+           # feature plans can demonstrate mesh allow/deny on those attempts.
+---
+# ----- dataspace --------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: baseline
+  namespace: dataspace
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # RULE — same-namespace only (baseline).
+    # WHY: redis/postgres are the protected TCP services. At baseline, NO other namespace
+    # may reach them at L3/L4 — this is the CNI half of the plan 09 isolation story. The
+    # mesh half (AuthorizationPolicy on source principal + port) is added in plan 09 to
+    # allow ONLY the 'trusted' client. Together: CNI blocks by namespace/IP, mesh blocks
+    # by cryptographic identity, so a spoofed IP or a wrong identity are both stopped.
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: dataspace }
+  egress:
+    - {}   # open: keeps DNS + the ztunnel data path healthy; inbound deny is what
+           # isolates these services.

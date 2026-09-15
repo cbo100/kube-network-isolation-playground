@@ -1,0 +1,84 @@
+# =============================================================================
+# STRICT mTLS mesh-wide, with a scoped exception for the ingress gateway listener
+# =============================================================================
+# WHY STRICT EXISTS
+#   The mesh security model rests on *workload identity*. ztunnel gives every ambient
+#   pod a cryptographic SPIFFE identity (cluster.local/ns/<ns>/sa/<sa>) and can mutually
+#   authenticate + encrypt pod-to-pod traffic (mTLS over HBONE). The AuthorizationPolicies
+#   in plans 06-10 select on that identity. Those rules are only trustworthy if the
+#   identity cannot be spoofed and traffic cannot be read/replayed in transit.
+#
+# WHAT STRICT MODE DOES (and why it matters)
+#   mode: STRICT forces every request to an in-mesh workload to be mTLS; plaintext is
+#   rejected. That is what makes "source principal" non-spoofable — an attacker cannot
+#   forge a plaintext request claiming to be another ServiceAccount. PERMISSIVE (the
+#   default) accepts BOTH mTLS and plaintext, leaving a bypass; STRICT closes it.
+#
+# WHY namespace: istio-system
+#   A PeerAuthentication in the mesh root namespace (istio-system) is the mesh-wide
+#   default, applying STRICT to all ambient namespaces at once (safe for new namespaces
+#   too, instead of relying on per-namespace policies that are easy to forget).
+#
+# BLAST RADIUS
+#   STRICT only governs traffic where BOTH ends are in the mesh. Non-mesh destinations
+#   (the monitoring/istio-system UIs, which are intentionally NOT ambient-enrolled) are
+#   unaffected — ztunnel uses plaintext to non-mesh peers — so Grafana/Prometheus/
+#   Alertmanager/Kiali keep working through the ingress.
+# =============================================================================
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: istio-system
+spec:
+  mtls:
+    # Require mTLS on all in-mesh traffic. This is the linchpin that makes the
+    # identity-based authorization in the later plans un-spoofable.
+    mode: STRICT
+---
+# =============================================================================
+# Exception: PERMISSIVE on the ingress gateway's inbound listener (port 80)
+# =============================================================================
+# WHY THIS IS NECESSARY (learned empirically)
+#   plan 02 enrolls kgateway-system into ambient, so the ingress gateway pod ('http')
+#   is a MESH workload with its own ztunnel-managed identity. But the traffic that
+#   ENTERS the gateway comes from OUTSIDE the mesh: the host hostPort (localhost:9090)
+#   -> node :80 -> gateway pod :80. That inbound hop is plaintext (a browser/curl is not
+#   an mTLS mesh peer). Under a blanket STRICT policy, ztunnel REJECTS that plaintext
+#   inbound, and the entire ingress dies — even the gateway's own /.gw/ping (a
+#   DirectResponse) becomes unreachable, and every UI/app behind the gateway returns
+#   "Empty reply from server".
+#
+# WHAT THIS EXCEPTION DOES
+#   A workload-scoped PeerAuthentication in kgateway-system, selecting the gateway pod
+#   and setting portLevelMtls for its listener port (80) to PERMISSIVE. This allows the
+#   external plaintext ingress to be accepted on port 80 ONLY, while:
+#     - the gateway's *outbound* calls to upstream app pods are still mTLS (ztunnel
+#       initiates HBONE regardless), so app-side STRICT + AuthorizationPolicies still
+#       apply to gateway->app traffic; and
+#     - every other port / workload in the mesh remains STRICT.
+#
+# WHY SCOPING TO PORT 80 (not the whole pod) MATTERS
+#   We only want to relax the ONE hop that is legitimately external (browser -> edge).
+#   Keeping the exception to the listener port avoids weakening any other traffic to or
+#   from the gateway. This is the standard pattern for an edge proxy sitting inside an
+#   otherwise-STRICT ambient mesh.
+# =============================================================================
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: ingress-gateway-permissive
+  namespace: kgateway-system
+spec:
+  selector:
+    matchLabels:
+      # the kgateway-generated proxy pod for the 'http' Gateway
+      gateway.networking.k8s.io/gateway-name: http
+  mtls:
+    # default for this workload stays STRICT...
+    mode: STRICT
+  portLevelMtls:
+    # ...except the public listener port, which must accept plaintext from outside the
+    # mesh (the browser/curl hitting localhost:9090 -> :80). Without this, ingress dies.
+    "80":
+      mode: PERMISSIVE

@@ -1,0 +1,66 @@
+# =============================================================================
+# Default-deny authorization, per ambient app namespace
+# =============================================================================
+# WHY THIS EXISTS
+#   "Secure by default" — before layering per-feature ALLOW rules, we flip each app
+#   namespace to deny-all so that nothing is reachable unless explicitly permitted.
+#   This is the foundation the feature plans (06-10) build on: each one adds only the
+#   minimal ALLOW it needs, and everything else stays denied. Without a default-deny,
+#   forgetting a rule would silently leave a workload open; with it, a missing rule
+#   fails safe (closed).
+#
+# HOW AN EMPTY-SPEC POLICY DENIES EVERYTHING (the key Istio semantic)
+#   Istio authorization is deny-by-default *only once a policy with an ALLOW action
+#   exists that could match a workload*. An AuthorizationPolicy with `spec: {}` — no
+#   action, no rules — is the canonical "default-deny": it matches all workloads in the
+#   namespace and, because it contains no rule that can ever evaluate to ALLOW, the
+#   effective result is that all requests are denied. Later ALLOW policies are additive:
+#   a request is permitted if ANY ALLOW policy matches it.
+#
+# WHERE IT'S ENFORCED
+#   ztunnel enforces this at L4 for ambient workloads — NO waypoint is required for
+#   namespace/principal/port-level rules. (L7 rules like JWT/path do need a waypoint;
+#   that's plan 10.) Enforcing at ztunnel means even raw TCP services (redis/postgres)
+#   are covered, not just HTTP.
+#
+# DELIBERATE CONSEQUENCE RIGHT NOW (expected, not a bug)
+#   - bookinfo: the kgateway 'http' identity -> productpage call is denied, so the
+#     bookinfo.localhost ingress route returns 403 until plan 06 allows it.
+#   - clientspace/dataspace: cross-namespace calls are denied until plans 06/07/09
+#     add their allows.
+#
+# WHY ONLY THESE THREE NAMESPACES
+#   Only the ambient app namespaces are locked down. monitoring/istio-system are NOT
+#   ambient-enrolled and get NO policy here, so the observability UIs stay reachable.
+#   (Enrolling + restricting monitoring is an optional exercise, out of scope here.)
+# =============================================================================
+---
+# bookinfo — the L7 sample app fronted by the ingress. Deny-all here is what forces
+# plan 06 (namespace isolation) and plan 10 (OIDC) to add explicit allows before the
+# productpage is reachable again.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: default-deny
+  namespace: bookinfo
+spec: {}   # empty spec => matches all workloads, permits nothing => deny-all
+---
+# clientspace — the test/"attacker" client pods. Deny-all ensures these clients can
+# only reach what a feature plan explicitly authorizes (e.g. only 'trusted' -> redis
+# in plan 09), demonstrating identity-based isolation from the client side.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: default-deny
+  namespace: clientspace
+spec: {}   # empty spec => deny-all
+---
+# dataspace — the TCP data services (redis/postgres). Deny-all is the baseline for the
+# L4 service-isolation demo (plan 09): only an approved source principal on the correct
+# port will be allowed; everything else (including the 'untrusted' client) is reset.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: default-deny
+  namespace: dataspace
+spec: {}   # empty spec => deny-all
