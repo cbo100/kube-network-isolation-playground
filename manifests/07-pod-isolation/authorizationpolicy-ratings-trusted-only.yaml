@@ -1,0 +1,63 @@
+# =============================================================================
+# Pod-to-pod isolation (mesh layer, L4) — restrict 'ratings' to ONE workload identity
+# =============================================================================
+# THE PROBLEM THIS SOLVES (and why a plain ALLOW is not enough)
+#   plan 06 added a NAMESPACE-wide ALLOW (allow-clientspace) letting *any* workload in
+#   clientspace reach bookinfo. That includes both the 'trusted' pod (SA trusted-client)
+#   and the 'untrusted' pod (SA untrusted-client) — so today BOTH can reach 'ratings'.
+#   We want finer granularity: only the trusted workload IDENTITY may reach 'ratings',
+#   even though untrusted sits in the SAME namespace.
+#
+#   Istio ALLOW policies are ADDITIVE (logical OR): adding another ALLOW cannot REMOVE
+#   access that an existing broader ALLOW already grants. So we cannot tighten 'ratings'
+#   by adding an allow-principal policy — the namespace ALLOW from plan 06 would still let
+#   untrusted in. We need a rule that can OVERRIDE a broader allow.
+#
+# THE MECHANISM: a targeted DENY (evaluated BEFORE allow)
+#   Istio authorization precedence is: CUSTOM -> DENY -> ALLOW. DENY policies are checked
+#   first and win. So a DENY scoped to the 'ratings' workload that fires for every source
+#   EXCEPT the trusted principal produces exactly "only trusted-client may reach ratings",
+#   regardless of the namespace-wide ALLOW. This keeps plan 06 untouched and reversible.
+#
+# WHY IDENTITY (source principal) IS THE POINT
+#   Under STRICT mTLS (plan 05) every workload has a SPIFFE identity
+#   spiffe://cluster.local/ns/<ns>/sa/<serviceaccount>, proven cryptographically by ztunnel.
+#   Matching on that principal is un-spoofable: an attacker cannot become 'trusted-client'
+#   by changing IP, namespace label, or headers — they'd need that SA's mTLS cert. This is
+#   strictly stronger than namespace- or IP-based rules (plan 06 / NetworkPolicy).
+#
+# ENFORCEMENT: ztunnel at L4 — NO waypoint. Denials appear as connection resets, not 403.
+#
+# SCOPE: only the 'ratings' workload is tightened. Other bookinfo services (productpage,
+# details, reviews) remain governed by the plan 06 namespace ALLOW — so 'untrusted' can
+# still reach THOSE, which makes the demo crisp: untrusted -> ratings is denied while
+# untrusted -> productpage still works, isolating a single workload by identity.
+#
+# NOTE on bookinfo's own internal callers: reviews-v2/v3 normally call ratings. Under the
+# plan 05/06 baseline those internal calls are ALREADY denied (plan 06 only allowed the
+# clientspace namespace, not the in-namespace bookinfo-reviews identity), so this DENY does
+# not regress any path that currently works. If you later add an internal allow for
+# reviews->ratings, add the bookinfo-reviews principal to the exception list below too.
+# =============================================================================
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: ratings-only-trusted-client
+  namespace: bookinfo
+spec:
+  action: DENY
+  # target ONLY the ratings workload
+  selector:
+    matchLabels:
+      app: ratings
+  rules:
+    # DENY when the source principal is NOT the trusted client. Because DENY is evaluated
+    # before ALLOW, this overrides plan 06's namespace-wide allow for 'ratings' only:
+    #   - request from trusted-client  -> notPrincipals does NOT match -> DENY doesn't fire
+    #                                      -> falls through to plan 06 ALLOW -> permitted.
+    #   - request from anyone else      -> notPrincipals matches        -> DENY fires
+    #                                      -> rejected (connection reset).
+    - from:
+        - source:
+            notPrincipals:
+              - "cluster.local/ns/clientspace/sa/trusted-client"
