@@ -147,6 +147,38 @@ CNI/host controls are excluded by our constraints, the recommended posture is:
   Istio ambient. Revisit if we adopt a CNI with enforced egress or a newer Istio minor that
   adds a ztunnel-level registry-only mode.
 
+## Upstream backlog: is the gap being closed?
+
+Checked the Istio GitHub backlog (istio/istio + istio/ztunnel) for any sign a REGISTRY_ONLY
+equivalent is coming to ambient. **It is not — and this is a deliberate design decision, not
+an unfixed bug.**
+
+- **istio/istio #54281 — "ztunnel not respecting `outboundTrafficPolicy: REGISTRY_ONLY`"**
+  (CLOSED / *working as intended*). Maintainer **howardjohn**:
+  > "This is working as intended. Ambient mode does not support this setting. 99% of the
+  > time someone is aiming to use this, they are **using it wrong**, so we opted to avoid it."
+  He points to his write-up *"You can't block egress"*
+  (<https://blog.howardjohn.info/posts/bypass-egress/>): in-mesh egress blocking is trivially
+  bypassable (a compromised pod can just leave the mesh), so it gives false assurance — real
+  egress control belongs at the network/firewall layer. This is exactly plan 11's
+  "enforce below the mesh" conclusion, straight from the maintainers.
+- **istio/istio #58644 — "Ambient can't block outgoing HTTPS connections?"** (2026): no fix;
+  went stale and auto-closed, users only left `+1`.
+- **istio/istio #57661 — "Pods can access external services via waypoints in other
+  namespaces"** (2026): closed; the thread is about ServiceEntry `exportTo`/merging quirks,
+  not a default-deny feature.
+- **istio/ztunnel #369 — RFC on outbound passthrough behavior**: CLOSED/COMPLETED — the
+  passthrough (allow-unknown) behavior was intentionally *specified*, not removed.
+- **No open issue or enhancement** in istio/istio proposes an ambient egress default-deny
+  (`ambient egress` → none open). Open ztunnel egress-related issues are all
+  performance/stability (e.g. #2019 external-connect latency, #2085 stale CIDR lookups), not
+  a registry-only mode.
+
+**Implication:** don't wait for upstream. The sanctioned posture is precisely what plan 08
+does (per-declared-service identity authz) plus a network-layer backstop for a hard lockdown.
+This is stronger than "not yet implemented" — the maintainers have explicitly declined to
+bring REGISTRY_ONLY to ambient.
+
 ## Re-check trigger
 
 `scripts/verify-isolation.sh` asserts the undeclared-host rows are reachable by all three
