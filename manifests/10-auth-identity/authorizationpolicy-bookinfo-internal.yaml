@@ -1,0 +1,102 @@
+# =============================================================================
+# bookinfo internal call graph — strict, per-identity mesh authorization (L4)
+# =============================================================================
+# WHY
+#   plan 10's allow-ingress-to-productpage opened only the ingress -> productpage hop, so
+#   productpage renders but its downstream calls (details, reviews, ratings) are still
+#   denied by plan 05's default-deny. These policies open EXACTLY the internal edges the
+#   app needs and nothing more, each scoped to the caller's cryptographic SPIFFE identity.
+#
+# THE APP'S CALL GRAPH (and the edges we permit)
+#   productpage ──► details        (permitted here)
+#   productpage ──► reviews        (permitted here)
+#   reviews     ──► ratings        (permitted here)
+#   details     ──► (nothing)      details is a LEAF — it must NOT reach ratings, and this
+#                                   file grants it nothing outbound. ratings only accepts
+#                                   'reviews'; 'details' is never in any ratings allow.
+#
+# STRICTNESS MODEL (least privilege, per destination workload)
+#   Each policy targets ONE destination workload (selector matchLabels) and allows ONLY
+#   the specific source principal(s) that legitimately call it:
+#     - details accepts ONLY productpage
+#     - reviews accepts ONLY productpage
+#     - ratings accepts ONLY reviews  (see the DENY interaction note below)
+#   `principals` is matched by ztunnel against the peer's authenticated SPIFFE identity
+#   (spiffe://cluster.local/ns/bookinfo/sa/<sa>), proven by STRICT mTLS (plan 05), so it
+#   cannot be spoofed by IP/label/header. Additive with default-deny: a workload permits
+#   iff a listed principal matches, else the connection is reset.
+#
+# ENFORCED AT ztunnel (L4) — NO waypoint. Denials are connection resets, not HTTP 403.
+#
+# INTERACTION WITH plan 07's ratings DENY (important)
+#   plan 07 (authorizationpolicy-ratings-trusted-only.yaml) is a DENY on 'ratings' that
+#   fires for every source NOT in its exception list, and DENY is evaluated BEFORE ALLOW.
+#   Adding an ALLOW for reviews->ratings here is NOT enough on its own — the DENY would
+#   still reset the reviews call. As that file's own note instructs, we ALSO add the
+#   'bookinfo-reviews' principal to plan 07's notPrincipals exception list so the DENY does
+#   not fire for reviews. The two changes together yield: ratings is reachable ONLY by
+#   'reviews' (in-app) and 'trusted-client' (the plan 07 demo) — details and everyone else
+#   stay denied.
+# =============================================================================
+---
+# details accepts ONLY productpage.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-productpage-to-details
+  namespace: bookinfo
+spec:
+  action: ALLOW
+  selector:
+    matchLabels:
+      app: details
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/bookinfo/sa/bookinfo-productpage
+      to:
+        - operation:
+            ports: ["9080"]
+---
+# reviews accepts ONLY productpage.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-productpage-to-reviews
+  namespace: bookinfo
+spec:
+  action: ALLOW
+  selector:
+    matchLabels:
+      app: reviews
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/bookinfo/sa/bookinfo-productpage
+      to:
+        - operation:
+            ports: ["9080"]
+---
+# ratings accepts ONLY reviews (in-app). This ALLOW must be paired with the plan 07 DENY
+# exception for bookinfo-reviews (see that file) or the DENY overrides it. details is
+# deliberately absent — details can never reach ratings.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-reviews-to-ratings
+  namespace: bookinfo
+spec:
+  action: ALLOW
+  selector:
+    matchLabels:
+      app: ratings
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/bookinfo/sa/bookinfo-reviews
+      to:
+        - operation:
+            ports: ["9080"]

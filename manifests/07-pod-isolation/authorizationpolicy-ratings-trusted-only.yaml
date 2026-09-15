@@ -61,3 +61,7 @@ spec:
         - source:
             notPrincipals:
               - "cluster.local/ns/clientspace/sa/trusted-client"
+              # plan 10 opened the in-app reviews->ratings edge. reviews must be exempt
+              # from this DENY (DENY beats ALLOW) or its ratings call is reset, breaking the
+              # bookinfo reviews panel. See manifests/10-auth-identity/.
+              - "cluster.local/ns/bookinfo/sa/bookinfo-reviews"

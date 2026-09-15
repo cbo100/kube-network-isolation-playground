@@ -1,0 +1,45 @@
+# =============================================================================
+# Ingress -> bookinfo, protected by WORKLOAD (SPIFFE) identity — L4, no waypoint
+# =============================================================================
+# WHY THIS EXISTS
+#   plan 05 put bookinfo into default-deny, which (deliberately) also blocks the
+#   kgateway ingress from reaching productpage — the bookinfo.localhost route returns
+#   503. This policy pokes the minimal, identity-scoped hole that restores the ingress:
+#   it permits ONLY the kgateway proxy's workload identity to call productpage.
+#
+#   This is the "normal mesh" version of exposing an app: end-user OIDC/JWT (the original
+#   plan 10 — Keycloak, edge OAuth2, waypoint JWT validation) is PARKED on the backlog.
+#   Here we prove just the WORKLOAD-identity layer end to end for the ingress path.
+#
+# WHY THE PRINCIPAL IS TRUSTWORTHY (vs an IP/label match)
+#   `from.source.principals` is matched by ztunnel against the peer's authenticated
+#   SPIFFE identity (cluster.local/ns/<ns>/sa/<sa>), established by STRICT mTLS (plan 05).
+#   The kgateway proxy runs as ServiceAccount `http` in `kgateway-system`, so its identity
+#   is `cluster.local/ns/kgateway-system/sa/http`. That identity is cryptographic and
+#   cannot be spoofed by forging an IP or header — the whole point vs. a NetworkPolicy.
+#
+# ENFORCED AT ztunnel (L4) — NO WAYPOINT
+#   Matching on a source principal is an L4 concern, so ztunnel enforces it directly; no
+#   waypoint proxy is required. AuthorizationPolicies are additive: this ALLOW combines
+#   with plan 05's empty-spec default-deny so productpage permits iff the caller is the
+#   ingress identity, and stays denied for everything else.
+#
+# SCOPE
+#   Targets only productpage (the workload the ingress route fronts). The other bookinfo
+#   services remain governed by the existing plan 06/07 policies.
+# =============================================================================
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-ingress-to-productpage
+  namespace: bookinfo
+spec:
+  action: ALLOW
+  selector:
+    matchLabels:
+      app: productpage
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/kgateway-system/sa/http

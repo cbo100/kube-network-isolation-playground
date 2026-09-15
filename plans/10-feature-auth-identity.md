@@ -1,5 +1,17 @@
 # Plan 10 — Mesh auth with identity carried into the app (L7)
 
+> **STATUS: the L7 end-user-identity design below is PARKED on the backlog.**
+> What actually shipped is a simplified plan 10: expose bookinfo through the ingress,
+> protected by the kgateway proxy's **workload (SPIFFE) identity** at L4 (ztunnel, no
+> waypoint). See `scripts/10-feature-auth-identity.sh` and
+> `manifests/10-auth-identity/authorizationpolicy-allow-ingress.yaml`.
+>
+> The full OIDC/JWT design (Keycloak at the edge + waypoint JWT validation) is retained
+> below as the backlog spec. Note learned during a spike: the authorization-code flow
+> needs an HTTPS listener on host :9443, and kind+Podman rootlessport only wires a host
+> port whose container port is bound at node startup — so enabling :9443 later requires
+> restarting the kind node container (or baking the HTTPS listener in from plan 01).
+
 ## Purpose
 Demonstrate **two identity layers** and carry end-user identity into application traffic:
 1. **Workload identity** — SPIFFE mTLS from ztunnel (already in place from plan 05).
