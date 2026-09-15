@@ -1,0 +1,64 @@
+# =============================================================================
+# Egress authorization — PER-IDENTITY access matrix (one policy per client identity)
+# =============================================================================
+# WHY THIS SHAPE
+#   `targetRefs` is a LIST, and one AuthorizationPolicy may target MULTIPLE ServiceEntries.
+#   So instead of one policy per service, we write one policy per CLIENT IDENTITY that lists
+#   every external service that identity may reach. This maps 1:1 to "who can access what"
+#   and keeps the matrix in a couple of readable objects. (Verified: a single policy
+#   targeting both tcpbin + example.com grants trusted both, while others stay denied.)
+#
+# WHY TARGET THE SERVICEENTRY (not the waypoint Gateway)
+#   A policy targeting the egress waypoint *Gateway* is coarse: one allow lets that identity
+#   reach EVERY service through the waypoint — you cannot scope per service. Targeting the
+#   ServiceEntry scopes the allow to specific external services, which is what makes the
+#   matrix possible.
+#
+# THE MATRIX WE ENFORCE
+#   trusted-client   -> tcpbin.com (TCP)  +  example.com (HTTPS)     [2 services]
+#   untrusted-client -> en.wikipedia.org (HTTPS)                     [1 service]
+#   everyone else    -> none of the declared services
+#
+# HOW "everyone else is denied" ARISES (key semantic)
+#   Egress authz is a per-target allow-list: once ANY ALLOW policy targets a given
+#   ServiceEntry, that service is default-deny for every source not listed. Each of the three
+#   ServiceEntries is covered by exactly one of the policies below, so unlisted identities
+#   (netshoot/SA-default, otherspace, ...) are denied everywhere.
+#   ⚠️ A ServiceEntry with NO policy targeting it is OPEN TO ALL — there is no automatic
+#   per-service default-deny. Every declared service MUST be covered here; keep this file and
+#   serviceentries.yaml in lockstep.
+#
+# IDENTITY, NOT IP: matches are on the source workload SPIFFE principal (STRICT mTLS),
+# evaluated at the waypoint — un-spoofable by IP/namespace/header.
+# =============================================================================
+---
+# trusted-client may reach TWO external services: tcpbin.com and example.com
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: egress-allow-trusted
+  namespace: clientspace
+spec:
+  targetRefs:
+    - { group: networking.istio.io, kind: ServiceEntry, name: tcpbin-echo }
+    - { group: networking.istio.io, kind: ServiceEntry, name: example-com }
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/clientspace/sa/trusted-client"]
+---
+# untrusted-client may reach exactly ONE external service: en.wikipedia.org
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: egress-allow-untrusted
+  namespace: clientspace
+spec:
+  targetRefs:
+    - { group: networking.istio.io, kind: ServiceEntry, name: wikipedia }
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/clientspace/sa/untrusted-client"]

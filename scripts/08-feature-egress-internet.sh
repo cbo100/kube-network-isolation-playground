@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# Plan 08 — pod-to-internet (egress) isolation, done the ambient-correct way.
+# Plan 08 — pod-to-internet (egress) isolation, done the ambient-correct way, with a
+# PER-SERVICE access matrix.
 #
 # Under ambient, ztunnel is the egress actor, so Kubernetes NetworkPolicy egress and
 # meshConfig REGISTRY_ONLY do NOT give per-identity external control (verified). The
 # working mechanism is an EGRESS WAYPOINT: declare approved external services via
-# ServiceEntry (routed through the waypoint) and authorize by source SPIFFE identity.
+# ServiceEntry (routed through the waypoint) and authorize PER-SERVICE by targeting each
+# ServiceEntry with its own AuthorizationPolicy (targeting the Gateway would be coarse).
 #
-# Demo: only the 'trusted' pod may reach two declared external services:
-#   - tcpbin.com:4242  (raw TCP echo)   - non-HTTP L4 egress
-#   - example.com:443  (HTTPS)          - web egress
-# 'untrusted' and 'netshoot' are denied to BOTH.
+# Matrix enforced:
+#   trusted-client   -> tcpbin.com:4242 (TCP)  AND  example.com:443 (HTTPS)
+#   untrusted-client -> en.wikipedia.org:443 (HTTPS)
+#   any other pod    -> NONE of the declared services
 # Idempotent: kubectl apply converges on re-run.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
@@ -24,51 +26,62 @@ log "creating egress waypoint (clientspace/egress-wp)"
 kubectl apply -f "${M}/waypoint.yaml"
 retry 30 5 kubectl -n clientspace rollout status deploy/egress-wp --timeout=20s
 
-# --- 2. declare approved external services (routed via the waypoint) ----------
-log "declaring approved external services (tcpbin.com:4242, example.com:443)"
+# --- 2. declare the three approved external services --------------------------
+log "declaring 3 external services (tcpbin.com, example.com, en.wikipedia.org) via waypoint"
 kubectl apply -f "${M}/serviceentries.yaml"
 
-# --- 3. authorize ONLY the trusted identity on the waypoint -------------------
-log "authorizing ONLY clientspace/trusted-client for egress (AuthorizationPolicy on waypoint)"
-kubectl apply -f "${M}/authorizationpolicy-egress-allow-trusted.yaml"
+# --- 3. per-service authorization (the matrix) --------------------------------
+log "applying per-ServiceEntry AuthorizationPolicies (identity -> service matrix)"
+kubectl apply -f "${M}/authorizationpolicies.yaml"
 
-# let the waypoint + ztunnel converge
+# clean up policy names from earlier iterations, if present
+kubectl -n clientspace delete authorizationpolicy \
+  egress-allow-trusted-legacy egress-tcpbin-allow-trusted egress-example-allow-trusted \
+  egress-wikipedia-allow-untrusted egress-trusted-multi \
+  --ignore-not-found >/dev/null 2>&1 || true
+
 sleep 8
 
 # --- 4. verify ----------------------------------------------------------------
 fail=0
 
-# raw TCP echo test: send a line, expect it echoed back. prints "ok"/"no".
+# raw TCP echo test -> "ok"/"no"
 echo_ok() { # <pod>
   kubectl -n clientspace exec "$1" -- sh -c \
-    'out=$(echo plan08-egress-probe | nc -w5 tcpbin.com 4242 2>/dev/null | head -1); [ "$out" = "plan08-egress-probe" ] && echo ok || echo no'
+    'out=$(echo plan08-probe | nc -w5 tcpbin.com 4242 2>/dev/null | head -1); [ "$out" = "plan08-probe" ] && echo ok || echo no'
 }
-# HTTPS code (000 on block/timeout, no double-print)
-https_code() { # <pod>
+# HTTPS code to an arbitrary https host -> code (000 on block), no double-print
+https_code() { # <pod> <url>
   kubectl -n clientspace exec "$1" -- sh -c \
-    "curl -sS --max-time 8 https://example.com -o /dev/null -w '%{http_code}' 2>/dev/null; true"
+    "curl -sS --max-time 8 '$2' -o /dev/null -w '%{http_code}' 2>/dev/null; true"
+}
+expect() { # <label> <actual> <predicate: eq|ne> <value>
+  local label="$1" actual="$2" pred="$3" val="$4"
+  case "$pred" in
+    eq) if [ "$actual" = "$val" ]; then log "  $label = ${actual} (ok)"; else warn "$label expected ${val}, got ${actual}"; fail=1; fi;;
+    ne) if [ "$actual" != "$val" ]; then log "  $label = ${actual} (ok)"; else warn "$label expected NOT ${val}, got ${actual}"; fail=1; fi;;
+  esac
 }
 
-log "verifying raw TCP egress (tcpbin.com:4242 echo):"
-t="$(echo_ok trusted)"
-log "  trusted   -> tcpbin.com:4242 = ${t} (expect ok: allowed)"
-[ "$t" = "ok" ] || { warn "trusted should reach tcpbin echo, got ${t}"; fail=1; }
-u="$(echo_ok untrusted)"
-log "  untrusted -> tcpbin.com:4242 = ${u} (expect no: denied)"
-[ "$u" = "no" ] || { warn "untrusted should be denied to tcpbin echo, got ${u}"; fail=1; }
+log "MATRIX — trusted-client may reach tcpbin + example.com, NOT wikipedia:"
+expect "trusted -> tcpbin"    "$(echo_ok trusted)"                       eq ok
+expect "trusted -> example"   "$(https_code trusted https://example.com)" eq 200
+expect "trusted -> wikipedia" "$(https_code trusted https://en.wikipedia.org)" eq 000
 
-log "verifying HTTPS egress (example.com:443):"
-t="$(https_code trusted)"
-log "  trusted   -> https://example.com = ${t} (expect 200: allowed)"
-[ "$t" = "200" ] || { warn "trusted should reach HTTPS, got ${t}"; fail=1; }
-u="$(https_code untrusted)"
-log "  untrusted -> https://example.com = ${u} (expect 000: denied)"
-[ "$u" = "000" ] || { warn "untrusted should be denied to HTTPS, got ${u}"; fail=1; }
+log "MATRIX — untrusted-client may reach ONLY wikipedia:"
+expect "untrusted -> wikipedia" "$(https_code untrusted https://en.wikipedia.org)" ne 000
+expect "untrusted -> tcpbin"    "$(echo_ok untrusted)"                            eq no
+expect "untrusted -> example"   "$(https_code untrusted https://example.com)"      eq 000
+
+log "MATRIX — any other in-mesh pod (netshoot, SA default) may reach NONE:"
+expect "netshoot -> tcpbin"    "$(echo_ok netshoot)"                              eq no
+expect "netshoot -> example"   "$(https_code netshoot https://example.com)"       eq 000
+expect "netshoot -> wikipedia" "$(https_code netshoot https://en.wikipedia.org)"  eq 000
 
 [ "$fail" = 0 ] || die "plan 08 verification had failures (see warnings above)"
 
-log "plan 08 complete: identity-aware egress via waypoint — only 'trusted' reaches the"
-log "  declared external services (tcpbin.com:4242 raw TCP + example.com:443 HTTPS);"
-log "  untrusted/netshoot are denied. NOTE: only DECLARED hosts are enforced — undeclared"
-log "  hosts bypass the waypoint (REGISTRY_ONLY is not enforced by ztunnel in this version)."
+log "plan 08 complete: per-service identity egress matrix enforced via waypoint."
+log "  trusted -> {tcpbin, example.com}; untrusted -> {wikipedia}; others -> none."
+log "  NOTE: only DECLARED hosts are controlled; a ServiceEntry with NO policy is open to"
+log "  all, and undeclared hosts bypass the waypoint (REGISTRY_ONLY unenforced in ambient)."
 log "next: plans/09-feature-tcp-service.md"

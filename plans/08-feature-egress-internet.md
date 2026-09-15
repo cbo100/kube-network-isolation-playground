@@ -1,18 +1,23 @@
 # Plan 08 — Pod-to-internet (egress) isolation
 
 ## Purpose
-Restrict which external destinations a pod may reach, by **workload identity** — allow only
-an approved pod to reach approved external services. Covers **raw external TCP** and
-**HTTP/S**, not just websites.
+Restrict which external destinations a pod may reach, by **workload identity**, with a
+**per-service access matrix** — different identities get different external services. Covers
+**raw external TCP** and **HTTP/S**.
 
-## Motivating tests (real targets)
-Two concrete external services, one per traffic shape:
-- **Raw TCP:** `tcpbin.com:4242` — a public TCP echo server (send a line, it echoes back).
-- **HTTP/S:** `example.com:443`.
+## The matrix (goal state)
+Three declared external services, two client identities:
 
-As of plan 06, egress is completely **uncontrolled**: `trusted`, `untrusted`, and
-`otherspace` can all freely reach these (observed: echo works and HTTP 200 from every pod).
-This plan gates them so only the `trusted` identity gets out.
+| source \ service | tcpbin.com:4242 (TCP) | example.com:443 (HTTPS) | en.wikipedia.org:443 (HTTPS) |
+|---|---|---|---|
+| **trusted-client** | allow | allow | deny |
+| **untrusted-client** | deny | deny | allow |
+| any other in-mesh pod | deny | deny | deny |
+
+So `trusted` may reach 2 services, `untrusted` exactly 1, and everyone else none.
+
+As of plan 06, egress is completely **uncontrolled**: every pod can freely reach all of
+these (observed: echo works and HTTP 200 from every pod). This plan gates them per the matrix.
 
 ## What did NOT work in ambient (verified empirically — important)
 The obvious approaches fail under Istio **ambient**, because ztunnel (not the app pod) is the
@@ -40,42 +45,56 @@ Executed by `scripts/08-feature-egress-internet.sh` (idempotent). Manifests in
 `manifests/08-egress/`.
 1. Create an **egress waypoint** in `clientspace` (`waypoint.yaml`; Gateway of class
    `istio-waypoint`, `istio.io/waypoint-for: all`).
-2. Declare the approved external services and route them through the waypoint
-   (`serviceentries.yaml`): `tcpbin.com:4242` (protocol TCP) and `example.com:443`
-   (protocol TLS, so the waypoint matches SNI/host without terminating TLS).
-3. Authorize only the trusted identity on the waypoint
-   (`authorizationpolicy-egress-allow-trusted.yaml`):
+2. Declare the three approved external services and route them through the waypoint
+   (`serviceentries.yaml`): `tcpbin.com:4242` (protocol TCP), `example.com:443` and
+   `en.wikipedia.org:443` (protocol TLS, so the waypoint matches SNI/host without
+   terminating TLS).
+3. Authorize per the matrix (`authorizationpolicies.yaml`). Two important shape choices:
+   - **Target the `ServiceEntry`, not the waypoint Gateway.** A Gateway-targeted allow is
+     coarse — it grants the identity access to *every* service through the waypoint, so you
+     can't scope per service. Targeting the ServiceEntry scopes the allow to specific hosts.
+   - **`targetRefs` is a list**, and one policy may target multiple ServiceEntries — so we
+     write **one policy per identity** (not per service), listing the services it may reach:
    ```yaml
    apiVersion: security.istio.io/v1
    kind: AuthorizationPolicy
    metadata: { name: egress-allow-trusted, namespace: clientspace }
    spec:
-     targetRefs: [{ group: gateway.networking.k8s.io, kind: Gateway, name: egress-wp }]
+     targetRefs:                       # a LIST: one identity, multiple allowed services
+       - { group: networking.istio.io, kind: ServiceEntry, name: tcpbin-echo }
+       - { group: networking.istio.io, kind: ServiceEntry, name: example-com }
      action: ALLOW
      rules:
        - from: [{ source: { principals: ["cluster.local/ns/clientspace/sa/trusted-client"] } }]
+   # ...plus a second policy: egress-allow-untrusted -> [wikipedia]
    ```
 
 ## Verify
 ```sh
-# raw TCP echo — allowed for trusted, denied for untrusted:
-kubectl -n clientspace exec trusted   -- sh -c 'echo hi | nc -w5 tcpbin.com 4242'   # echoes "hi"
-kubectl -n clientspace exec untrusted -- sh -c 'echo hi | nc -w5 tcpbin.com 4242' || echo "denied (expected)"
-# HTTPS — allowed for trusted, denied for untrusted:
-kubectl -n clientspace exec trusted   -- curl -sS --max-time 8 https://example.com -o /dev/null -w 'trusted=%{http_code}\n'
-kubectl -n clientspace exec untrusted -- curl -sS --max-time 8 https://example.com -o /dev/null -w 'untrusted=%{http_code}\n' || echo "untrusted=denied (expected)"
+# trusted may reach tcpbin + example.com, but NOT wikipedia:
+kubectl -n clientspace exec trusted   -- sh -c 'echo hi | nc -w5 tcpbin.com 4242'                                    # echoes "hi"
+kubectl -n clientspace exec trusted   -- curl -sS --max-time 8 https://example.com    -o /dev/null -w 'ex=%{http_code}\n'   # 200
+kubectl -n clientspace exec trusted   -- curl -sS --max-time 8 https://en.wikipedia.org -o /dev/null -w 'wiki=%{http_code}\n' || echo "wiki=denied (expected)"
+# untrusted may reach ONLY wikipedia:
+kubectl -n clientspace exec untrusted -- curl -sS --max-time 8 https://en.wikipedia.org -o /dev/null -w 'wiki=%{http_code}\n'  # 301
+kubectl -n clientspace exec untrusted -- sh -c 'echo hi | nc -w5 tcpbin.com 4242' || echo "tcpbin=denied (expected)"
+# any other pod (netshoot, SA default) reaches none:
+kubectl -n clientspace exec netshoot  -- curl -sS --max-time 8 https://example.com    -o /dev/null -w 'ex=%{http_code}\n' || echo "denied (expected)"
 ```
 
 ## Notes / limitations (be honest about the guarantee)
-- **Enforceable guarantee:** "for a **declared** external service, only an approved identity
-  may reach it." Enforced by the waypoint on cryptographic SPIFFE identity — un-spoofable by
-  IP/namespace/header, unlike NetworkPolicy.
+- **`targetRefs` is a list; one policy can target many ServiceEntries.** You do NOT need a
+  separate AuthorizationPolicy per service — group by identity instead.
+- **A ServiceEntry with NO policy targeting it is OPEN TO ALL.** There is no automatic
+  per-service default-deny; every declared service must be covered by some allow policy, or
+  it is wide open. (`authorizationpolicies.yaml` and `serviceentries.yaml` must stay in sync.)
+- **Enforceable guarantee:** "for a **declared** external service, only the listed identities
+  may reach it." Enforced on cryptographic SPIFFE identity — un-spoofable by IP/namespace/
+  header, unlike NetworkPolicy.
 - **NOT enforced:** "block the entire rest of the internet." Undeclared hosts bypass the
-  waypoint and egress directly, because REGISTRY_ONLY is ineffective in ambient here. To
-  approximate a full allow-list you would need a working global egress deny (e.g. a Calico
-  policy applied to the ztunnel/node egress path, or a future ambient REGISTRY_ONLY fix).
-- The `example.com` ServiceEntry uses `protocol: TLS` so the waypoint matches on SNI/host
-  without decrypting; per-URL (path) egress would additionally require L7 HTTP handling.
+  waypoint (REGISTRY_ONLY is ineffective in ambient — see plan 11).
+- The TLS ServiceEntries match on SNI/host without decrypting; per-URL (path) egress would
+  additionally require L7 HTTP handling.
 
 ## Next
 `plans/09-feature-tcp-service.md`

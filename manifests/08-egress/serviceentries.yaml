@@ -1,27 +1,26 @@
 # =============================================================================
-# ServiceEntries: declare the approved external services and route them via the waypoint
+# ServiceEntries: declare the THREE approved external services, routed via the waypoint
 # =============================================================================
-# WHY ServiceEntry
-#   ztunnel only sends EXTERNAL traffic through the egress waypoint for hosts the mesh
-#   knows about. A ServiceEntry registers an external host/IP as a mesh service. The label
-#   `istio.io/use-waypoint: egress-wp` is what pins that service's egress to our waypoint,
-#   so requests to it become subject to the waypoint's AuthorizationPolicy.
+# WHY ServiceEntry + `istio.io/use-waypoint`
+#   ztunnel only routes EXTERNAL traffic through the egress waypoint for hosts the mesh
+#   knows about. Each ServiceEntry registers an external host as a mesh service, and the
+#   `istio.io/use-waypoint: egress-wp` label pins that service's egress to our waypoint so
+#   the waypoint's AuthorizationPolicies apply to it.
 #
-# WHY TWO ENTRIES (raw TCP + HTTPS) — cover both traffic shapes:
-#   1. tcpbin.com:4242 — a public raw-TCP ECHO service. Demonstrates identity-aware egress
-#      for NON-HTTP TCP (databases, brokers, custom protocols). protocol: TCP so the
-#      waypoint treats it as an opaque L4 stream.
-#   2. example.com:443 — outbound HTTPS. protocol: TLS lets the waypoint match on SNI/host
-#      without terminating TLS, demonstrating per-HOST egress for web traffic.
+# THREE SERVICES (to demonstrate a per-service access matrix):
+#   1. tcpbin.com:4242   raw TCP echo   — trusted may reach
+#   2. example.com:443   HTTPS          — trusted may reach
+#   3. en.wikipedia.org:443 HTTPS       — untrusted may reach
 #
-# WHY NOT DNS (:53) as the raw-TCP example:
-#   ztunnel runs its own DNS proxy. Declaring a host makes ztunnel answer DNS with a
-#   synthetic IP (240.240.0.1) to route the connection — which collides with using port 53
-#   itself as the target service. tcpbin:4242 avoids that entirely, so it's the clean
-#   raw-TCP target.
+# CRITICAL SCOPING FACT (verified empirically):
+#   Egress authz is per-TARGET allow-list. A ServiceEntry that has NO AuthorizationPolicy
+#   targeting it is OPEN TO EVERYONE (there is no automatic default-deny per ServiceEntry).
+#   Therefore EVERY declared service below MUST have a matching ServiceEntry-targeted
+#   AuthorizationPolicy (see authorizationpolicies.yaml) — otherwise it is wide open. Do not
+#   add a ServiceEntry here without also adding its allow policy.
 #
-# resolution: DNS lets ztunnel resolve the public hostname to real IPs at connect time.
-# location: MESH_EXTERNAL marks these as outside the mesh (no mTLS to the destination).
+# resolution: DNS   — ztunnel resolves the public hostname to real IPs at connect time.
+# location: MESH_EXTERNAL — outside the mesh (no mTLS to the destination).
 # =============================================================================
 apiVersion: networking.istio.io/v1
 kind: ServiceEntry
@@ -29,13 +28,11 @@ metadata:
   name: tcpbin-echo
   namespace: clientspace
   labels:
-    # pin this external service's egress to our waypoint so authz applies
     istio.io/use-waypoint: egress-wp
 spec:
   hosts: ["tcpbin.com"]
   ports:
-    # opaque L4 stream; the waypoint enforces identity, not L7 content
-    - { number: 4242, name: tcp-echo, protocol: TCP }
+    - { number: 4242, name: tcp-echo, protocol: TCP }   # opaque L4 stream
   resolution: DNS
   location: MESH_EXTERNAL
 ---
@@ -49,7 +46,20 @@ metadata:
 spec:
   hosts: ["example.com"]
   ports:
-    # protocol: TLS => match on SNI/host at the waypoint without terminating TLS
+    - { number: 443, name: tls-https, protocol: TLS }   # match SNI/host, don't terminate
+  resolution: DNS
+  location: MESH_EXTERNAL
+---
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: wikipedia
+  namespace: clientspace
+  labels:
+    istio.io/use-waypoint: egress-wp
+spec:
+  hosts: ["en.wikipedia.org"]
+  ports:
     - { number: 443, name: tls-https, protocol: TLS }
   resolution: DNS
   location: MESH_EXTERNAL
