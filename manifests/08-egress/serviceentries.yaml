@@ -1,0 +1,55 @@
+# =============================================================================
+# ServiceEntries: declare the approved external services and route them via the waypoint
+# =============================================================================
+# WHY ServiceEntry
+#   ztunnel only sends EXTERNAL traffic through the egress waypoint for hosts the mesh
+#   knows about. A ServiceEntry registers an external host/IP as a mesh service. The label
+#   `istio.io/use-waypoint: egress-wp` is what pins that service's egress to our waypoint,
+#   so requests to it become subject to the waypoint's AuthorizationPolicy.
+#
+# WHY TWO ENTRIES (raw TCP + HTTPS) — cover both traffic shapes:
+#   1. tcpbin.com:4242 — a public raw-TCP ECHO service. Demonstrates identity-aware egress
+#      for NON-HTTP TCP (databases, brokers, custom protocols). protocol: TCP so the
+#      waypoint treats it as an opaque L4 stream.
+#   2. example.com:443 — outbound HTTPS. protocol: TLS lets the waypoint match on SNI/host
+#      without terminating TLS, demonstrating per-HOST egress for web traffic.
+#
+# WHY NOT DNS (:53) as the raw-TCP example:
+#   ztunnel runs its own DNS proxy. Declaring a host makes ztunnel answer DNS with a
+#   synthetic IP (240.240.0.1) to route the connection — which collides with using port 53
+#   itself as the target service. tcpbin:4242 avoids that entirely, so it's the clean
+#   raw-TCP target.
+#
+# resolution: DNS lets ztunnel resolve the public hostname to real IPs at connect time.
+# location: MESH_EXTERNAL marks these as outside the mesh (no mTLS to the destination).
+# =============================================================================
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: tcpbin-echo
+  namespace: clientspace
+  labels:
+    # pin this external service's egress to our waypoint so authz applies
+    istio.io/use-waypoint: egress-wp
+spec:
+  hosts: ["tcpbin.com"]
+  ports:
+    # opaque L4 stream; the waypoint enforces identity, not L7 content
+    - { number: 4242, name: tcp-echo, protocol: TCP }
+  resolution: DNS
+  location: MESH_EXTERNAL
+---
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: example-com
+  namespace: clientspace
+  labels:
+    istio.io/use-waypoint: egress-wp
+spec:
+  hosts: ["example.com"]
+  ports:
+    # protocol: TLS => match on SNI/host at the waypoint without terminating TLS
+    - { number: 443, name: tls-https, protocol: TLS }
+  resolution: DNS
+  location: MESH_EXTERNAL

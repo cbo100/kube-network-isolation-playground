@@ -1,0 +1,45 @@
+# =============================================================================
+# Egress waypoint for clientspace
+# =============================================================================
+# WHY A WAYPOINT (and why NOT NetworkPolicy / REGISTRY_ONLY) — learned empirically:
+#   Under Istio ambient, a pod's OUTBOUND traffic is captured by istio-cni and handed to
+#   the node-local ztunnel, which makes the actual external connection. Consequences:
+#     - Kubernetes NetworkPolicy EGRESS can't do per-pod identity control here: Calico sees
+#       ztunnel (in istio-system, on the node) as the connection source, not the app pod.
+#       So a pod-scoped egress policy simply doesn't match external traffic.
+#     - meshConfig outboundTrafficPolicy: REGISTRY_ONLY is NOT enforced by ztunnel in this
+#       version — undeclared external hosts still pass through. (Verified: wikipedia stayed
+#       reachable under REGISTRY_ONLY.)
+#   The mechanism that DOES work is an egress WAYPOINT: for external services declared via
+#   ServiceEntry with `istio.io/use-waypoint`, ztunnel routes the traffic THROUGH this
+#   waypoint (an Envoy proxy), where an AuthorizationPolicy can allow/deny by the source
+#   workload's SPIFFE identity (L7) and by host.
+#
+# WHAT THIS IS
+#   A Gateway of class `istio-waypoint`. `istio.io/waypoint-for: all` (equivalently
+#   `istioctl waypoint apply --for all`) makes it eligible to handle both service- and
+#   workload-addressed traffic, which is what egress ServiceEntries use.
+#
+# SCOPE / LIMITATION (be honest about it)
+#   Only DECLARED external hosts (those with a ServiceEntry pointing at this waypoint) are
+#   forced through the waypoint and thus subject to authz. UNDECLARED hosts still egress
+#   directly and are NOT controlled (REGISTRY_ONLY would be the fix, but it's ineffective
+#   in ambient here). So the enforceable guarantee is: "for a declared external service,
+#   only an approved identity may reach it" — not "block the entire rest of the internet".
+# =============================================================================
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: egress-wp
+  namespace: clientspace
+  labels:
+    istio.io/waypoint-for: all
+spec:
+  gatewayClassName: istio-waypoint
+  listeners:
+    - name: mesh
+      port: 15008
+      protocol: HBONE
+      allowedRoutes:
+        namespaces:
+          from: Same
